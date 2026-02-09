@@ -65,21 +65,26 @@ CLIENT_SECRET_FILE = 'client_secret.json'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # 구글 연결 함수
-# 구글 연결 함수
-@st.cache_resource
+# 구글 연결 함수 (캐시 제거: 토큰 만료 문제 방지)
 def get_worksheet():
     creds = None
     
     # 1. Streamlit Cloud Secrets 확인 (배포 환경)
-    if "google_oauth" in st.secrets:
-        try:
-            token_info = st.secrets["google_oauth"]
-            creds = Credentials.from_authorized_user_info(token_info, SCOPES)
-        except Exception as e:
-            st.error(f"Secrets 인증 오류: {e}")
+    try:
+        from streamlit.runtime.secrets import Secrets
+        # secrets가 존재하는지 안전하게 확인
+        if "google_oauth" in st.secrets:
+            try:
+                token_info = st.secrets["google_oauth"]
+                creds = Credentials.from_authorized_user_info(token_info, SCOPES)
+            except Exception as e:
+                pass # Secrets 형식이 안 맞으면 로컬 파일 시도
+    except (FileNotFoundError, Exception):
+        # 로컬 환경(secrets.toml 없음)이면 무시하고 로컬 파일 확인으로 넘어감
+        pass
 
     # 2. 로컬 파일 확인 (개발 환경)
-    elif os.path.exists('token.json'):
+    if not creds and os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
         
     # 3. 인증 정보가 없거나 만료된 경우 (로컬 재인증 로직)
@@ -120,8 +125,8 @@ def load_data():
         df['날짜'] = pd.to_datetime(df['날짜']).dt.date
         return df
     except Exception as e:
-        # 에러 발생 시 빈 프레임 반환 (첫 실행 시 헤더가 없을 경우 등)
-        # st.error(f"초기 데이터 로드 중 알림: {e}") 
+        # 에러 발생 시 알림 표시 (디버깅용)
+        st.error(f"데이터 로드 에러: {e}") 
         return pd.DataFrame(columns=['날짜', '기사님', '카테고리', '금액', '내역'])
 
 # --- 데이터 저장 함수 ---
@@ -160,6 +165,7 @@ def save_expense_callback():
     st.session_state['msg_error'] = None
 
 # --- 메인 앱 ---
+    # --- 메인 앱 ---
 def main():
     st.markdown("""
         <div class="header-container">
@@ -173,45 +179,45 @@ def main():
         df = df.sort_values(by='날짜', ascending=False)
     today = datetime.date.today()
 
-    # --- 1. 지출 입력 폼 ---
-    st.markdown("### 📝 지출 입력")
-    with st.container(border=True):
-        if st.session_state.get('msg_success'):
-            st.success("✅ 등록되었습니다!")
-            st.session_state['msg_success'] = False
-        if st.session_state.get('msg_error'):
-            st.error(st.session_state['msg_error'])
-            st.session_state['msg_error'] = None
+    # --- 탭 구성 (최상단 이동) ---
+    tab_input, tab_month, tab_range, tab_stat = st.tabs(["📝 지출 입력", "📆 월별 조회", "🗓 기간 조회", "📊 통계"])
+
+    # [탭 1] 지출 입력 및 최근 내역
+    with tab_input:
+        st.markdown("### 📝 지출 입력")
+        with st.container(border=True):
+            if st.session_state.get('msg_success'):
+                st.success("✅ 등록되었습니다!")
+                st.session_state['msg_success'] = False
+            if st.session_state.get('msg_error'):
+                st.error(st.session_state['msg_error'])
+                st.session_state['msg_error'] = None
+            
+            # 삭제 메시지 표시 기능 추가
+            if st.session_state.get('msg_delete'):
+                st.success("🗑 삭제되었습니다!")
+                st.session_state['msg_delete'] = False
+
+            if 'input_amount' not in st.session_state: st.session_state['input_amount'] = None
+            if 'input_desc' not in st.session_state: st.session_state['input_desc'] = ""
+            if 'input_date' not in st.session_state: st.session_state['input_date'] = today
+
+            col1, col2 = st.columns(2)
+            col1.date_input("날짜", key='input_date')
+            col2.selectbox("기사님", ["존", "조셉"], key='input_driver')
+            
+            col3, col4 = st.columns(2)
+            col3.selectbox("항목", ["급여", "식비", "보너스", "기타"], key='input_category')
+            col4.number_input("금액 (₱)", min_value=0, step=100, key='input_amount')
+            
+            st.text_input("상세 내역 (선택)", placeholder="예: 2월 급여, 점심값", key='input_desc')
+            
+            st.write("")
+            st.button("저장하기", on_click=save_expense_callback, type="primary")
+
+        st.write("---")
+        st.markdown("### 📋 최근 내역")
         
-        # 삭제 메시지 표시 기능 추가
-        if st.session_state.get('msg_delete'):
-            st.success("🗑 삭제되었습니다!")
-            st.session_state['msg_delete'] = False
-
-        if 'input_amount' not in st.session_state: st.session_state['input_amount'] = None
-        if 'input_desc' not in st.session_state: st.session_state['input_desc'] = ""
-        if 'input_date' not in st.session_state: st.session_state['input_date'] = today
-
-        col1, col2 = st.columns(2)
-        col1.date_input("날짜", key='input_date')
-        col2.selectbox("기사님", ["존", "조셉"], key='input_driver')
-        
-        col3, col4 = st.columns(2)
-        col3.selectbox("항목", ["급여", "식비", "보너스", "기타"], key='input_category')
-        col4.number_input("금액 (₱)", min_value=0, step=100, key='input_amount')
-        
-        st.text_input("상세 내역 (선택)", placeholder="예: 2월 급여, 점심값", key='input_desc')
-        
-        st.write("")
-        st.button("저장하기", on_click=save_expense_callback, type="primary")
-
-    st.write("---")
-
-    # --- 2. 탭 구성 (내역 및 조회) ---
-    tab_list, tab_month, tab_range, tab_stat = st.tabs(["📋 최근 내역", "📆 월별 조회", "🗓 기간 조회", "📊 통계"])
-
-    # [탭 1] 최근 내역
-    with tab_list:
         if not df.empty:
             st.caption("최근 등록된 순서대로 보여집니다.")
             # 필터링
@@ -265,17 +271,18 @@ def main():
                 selected_month = col_m1.selectbox("조회할 월 선택", month_list, key="sel_month")
                 
                 month_df = df[df['연-월'] == selected_month].copy()
-                total_month_query = month_df['금액'].sum()
-
-                col_m2.metric(f"{selected_month} 총 지출", f"₱ {total_month_query:,.0f}")
                 
-                # 기사님 필터
+                # 기사님 필터 (계산 전 먼저 적용)
                 filter_driver_month = st.multiselect("기사님 필터 (비워두면 전체)", month_df['기사님'].unique(), key="filter_driver_month")
                 
                 if filter_driver_month:
                     month_df_filtered = month_df[month_df['기사님'].isin(filter_driver_month)]
                 else:
                     month_df_filtered = month_df.copy()
+
+                # 합계 계산 (필터 된 데이터 기준)
+                total_month_query = month_df_filtered['금액'].sum()
+                col_m2.metric(f"{selected_month} 총 지출", f"₱ {total_month_query:,.0f}")
 
                 # 데이터 에디터로 변경 (삭제 기능 추가)
                 if 'select_all_month' not in st.session_state: st.session_state.select_all_month = False
@@ -325,16 +332,17 @@ def main():
                 mask = (pd.to_datetime(df['날짜']).dt.date >= start_date) & (pd.to_datetime(df['날짜']).dt.date <= end_date)
                 range_df = df.loc[mask].copy()
                 
-                total_range = range_df['금액'].sum()
-                col_r2.metric("기간 총 지출", f"₱ {total_range:,.0f}")
-                
-                # 기사님 필터
+                # 기사님 필터 (계산 전 먼저 적용)
                 filter_driver_range = st.multiselect("기사님 필터 (비워두면 전체)", range_df['기사님'].unique(), key="filter_driver_range")
                 
                 if filter_driver_range:
                     range_df_filtered = range_df[range_df['기사님'].isin(filter_driver_range)]
                 else:
                     range_df_filtered = range_df.copy()
+
+                # 합계 계산 (필터 된 데이터 기준)
+                total_range = range_df_filtered['금액'].sum()
+                col_r2.metric("기간 총 지출", f"₱ {total_range:,.0f}")
 
                 # 데이터 에디터로 변경 (삭제 기능 추가)
                 if 'select_all_range' not in st.session_state: st.session_state.select_all_range = False
