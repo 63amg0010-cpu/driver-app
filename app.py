@@ -88,10 +88,18 @@ def get_worksheet():
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
         
     # 3. 인증 정보가 없거나 만료된 경우 (로컬 재인증 로직)
+    # 3. 인증 정보가 없거나 만료된 경우 (로컬 재인증 로직)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
+            try:
+                creds.refresh(Request())
+            except Exception:
+                # 리프레시 토큰이 만료되거나 취소된 경우 (invalid_grant 등)
+                creds = None
+                if os.path.exists('token.json'):
+                    os.remove('token.json')
+
+        if not creds:
             # 로컬에서만 실행 (Cloud에서는 실행 불가)
             if not os.path.exists('client_secret.json'):
                 # Cloud 환경에서 client_secret도 없고 secrets도 없으면 에러
